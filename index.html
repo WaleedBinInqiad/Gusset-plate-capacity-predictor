@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<title>Gusset Plate Capacity Predictor</title>
+<link rel="manifest" href="manifest.json">
+<style>
+  :root {
+    --teal: #0f766e;
+    --teal-dark: #0b5952;
+    --ink: #1e293b;
+    --muted: #64748b;
+    --card: #ffffff;
+    --bg: #f1f5f9;
+    --pos: #dc2626;   /* red = increases prediction, matches SHAP convention */
+    --neg: #2563eb;   /* blue = decreases prediction */
+    --radius: 16px;
+    --border: #e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  header {
+    background: linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%);
+    color: white;
+    padding: 22px 24px;
+    padding-top: calc(22px + env(safe-area-inset-top));
+    box-shadow: 0 4px 14px rgba(15,118,110,0.25);
+  }
+  header h1 { margin: 0; font-size: 1.3rem; font-weight: 700; letter-spacing: -0.01em; }
+  header p { margin: 5px 0 0; font-size: 0.85rem; opacity: 0.9; }
+
+  .layout {
+    max-width: 1100px;
+    margin: 20px auto;
+    padding: 0 20px 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  @media (min-width: 860px) {
+    .layout { flex-direction: row; align-items: flex-start; }
+    .col-left { flex: 0 0 320px; }
+    .col-right { flex: 1; min-width: 0; }
+  }
+
+  .card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 20px 20px 22px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 8px 20px rgba(15,23,42,0.06);
+  }
+  .card + .card { margin-top: 18px; }
+  .card h2 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 0 0 14px;
+    font-weight: 700;
+  }
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 6px;
+  }
+  .field input {
+    width: 100%;
+    padding: 12px 14px;
+    font-size: 1rem;
+    border-radius: 12px;
+    border: 1.5px solid var(--border);
+    background: #f8fafc;
+    color: var(--ink);
+    transition: border-color 0.15s;
+  }
+  .field input:focus { outline: none; border-color: var(--teal); background: white; }
+
+  button.predict, button.reset, button.export {
+    width: 100%;
+    padding: 14px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    border: none;
+    border-radius: 14px;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.1s;
+  }
+  button.predict {
+    color: white;
+    background: linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%);
+    box-shadow: 0 4px 12px rgba(15,118,110,0.3);
+    margin-top: 6px;
+  }
+  button.reset {
+    color: var(--ink);
+    background: #f1f5f9;
+    border: 1.5px solid var(--border);
+    margin-top: 10px;
+  }
+  button.export {
+    color: var(--teal-dark);
+    background: white;
+    border: 1.5px solid var(--teal);
+    width: auto;
+    padding: 8px 16px;
+    font-size: 0.8rem;
+  }
+  button:active { transform: scale(0.98); }
+
+  #resultCard { display: none; text-align: center; }
+  #resultCard.show { display: block; }
+  .result-value { font-size: 2.6rem; font-weight: 800; color: var(--teal-dark); letter-spacing: -0.02em; }
+  .result-unit { font-size: 1.05rem; font-weight: 600; color: var(--muted); margin-left: 6px; }
+  .result-sub { font-size: 0.78rem; color: var(--muted); margin-top: 4px; }
+
+  .explain-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .explain-head h2 { margin: 0; }
+
+  .caption { font-size: 0.72rem; color: var(--muted); margin-top: 12px; line-height: 1.4; }
+  .placeholder { color: var(--muted); font-size: 0.9rem; text-align: center; padding: 30px 10px; }
+  footer { text-align: center; font-size: 0.72rem; color: var(--muted); padding: 10px 20px 24px; }
+
+  svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Gusset Plate Capacity Predictor</h1>
+  <p>CatBoost-based compressive capacity estimate with feature-contribution analysis</p>
+</header>
+
+<div class="layout">
+  <div class="col-left">
+    <div class="card">
+      <h2>Input Parameters</h2>
+      <div id="inputs"></div>
+      <button class="predict" onclick="runPrediction()">Predict Capacity</button>
+      <button class="reset" onclick="resetDefaults()">Reset to Defaults</button>
+    </div>
+  </div>
+
+  <div class="col-right">
+    <div class="card" id="resultCard">
+      <h2>Predicted Ultimate Compressive Capacity</h2>
+      <div><span class="result-value" id="resultValue">--</span><span class="result-unit">kN</span></div>
+      <div class="result-sub" id="resultSub"></div>
+    </div>
+
+    <div class="card" id="explainCard">
+      <div class="explain-head">
+        <h2>Prediction Explanation (SHAP)</h2>
+        <button class="export" id="exportBtn" style="display:none" onclick="exportChart()">Export Figure</button>
+      </div>
+      <div id="chartHost">
+        <div class="placeholder">Enter parameters and click Predict Capacity to see the explanation.</div>
+      </div>
+      <div class="caption" id="captionText" style="display:none">
+        Waterfall chart of each input's contribution, starting from the model's
+        baseline prediction (dashed line) and ending at the predicted capacity
+        (solid line). Derived from precomputed SHAP analysis of the trained
+        model and interpolated for this specific input -- the predicted value
+        itself is computed exactly from the model; this breakdown approximates
+        how each input moved that prediction up or down.
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>Runs entirely on-device &mdash; no data leaves your browser.</footer>
+
+<script src="model_data.js"></script>
+<script>
+const FIELDS = [
+  { key: "Fy", label: "Yield Strength", unit: "MPa", def: 248 },
+  { key: "t", label: "Plate Thickness", unit: "mm", def: 6.35 },
+  { key: "Lb", label: "Buckling Length", unit: "mm", def: 203 },
+  { key: "Lc", label: "Cantilever Length", unit: "mm", def: 72 },
+  { key: "Lconn", label: "Connection Length", unit: "mm", def: 102 },
+  { key: "df", label: "Fastener Distance", unit: "mm", def: 76 },
+];
+
+function initInputs() {
+  const container = document.getElementById("inputs");
+  container.innerHTML = FIELDS.map(f => `
+    <div class="field">
+      <label>${f.label} (${f.unit})</label>
+      <input type="number" step="any" id="in_${f.key}" value="${f.def}">
+    </div>
+  `).join("");
+}
+
+function resetDefaults() {
+  FIELDS.forEach(f => { document.getElementById(`in_${f.key}`).value = f.def; });
+}
+
+function predict(model, xArr) {
+  let total = 0.0;
+  for (const t of model.trees) {
+    let idx = 0;
+    for (let d = 0; d < t.f.length; d++) {
+      if (xArr[t.f[d]] > t.b[d]) idx |= (1 << d);
+    }
+    total += t.v[idx];
+  }
+  return model.bias + model.scale * total;
+}
+
+function explainRescaled(lookup, model, xArr, k) {
+  k = k || 12;
+  const n = xArr.length;
+  const norm = new Array(n);
+  for (let i = 0; i < n; i++) norm[i] = (xArr[i] - lookup.feat_lo[i]) / lookup.feat_range[i];
+
+  const N = lookup.inputs_norm.length;
+  const dists = new Array(N);
+  for (let j = 0; j < N; j++) {
+    let s = 0;
+    const row = lookup.inputs_norm[j];
+    for (let i = 0; i < n; i++) { const diff = norm[i] - row[i]; s += diff * diff; }
+    dists[j] = Math.sqrt(s);
+  }
+  const order = dists.map((d, j) => [d, j]).sort((a, b) => a[0] - b[0]).slice(0, k);
+
+  let wsum = 0;
+  const shapAgg = new Array(n).fill(0);
+  for (const [d, j] of order) {
+    const w = 1 / (d + 1e-6);
+    wsum += w;
+    const sv = lookup.shap[j];
+    for (let i = 0; i < n; i++) shapAgg[i] += w * sv[i];
+  }
+  for (let i = 0; i < n; i++) shapAgg[i] /= wsum;
+
+  const exactPred = predict(model, xArr);
+  const target = exactPred - lookup.base_value;
+  const rawSum = shapAgg.reduce((a, b) => a + b, 0);
+  const factor = Math.abs(rawSum) > 1e-6 ? target / rawSum : 1;
+  const scaled = shapAgg.map(v => v * factor);
+  return { base: lookup.base_value, contributions: scaled, exactPred };
+}
+
+// ------------------------------------------------------------------
+// SHAP-style cascading waterfall chart, rendered as inline SVG.
+// Mirrors shap.plots.waterfall(): bars run left-to-right in descending
+// order of |contribution|, each starting where the previous one ended,
+// beginning at "base" and finishing exactly at "prediction". Red = raises
+// the prediction, blue = lowers it (matches shap's default palette).
+// ------------------------------------------------------------------
+function renderWaterfall(hostEl, base, prediction, rawItems) {
+  const hostWidth = Math.max(hostEl.clientWidth || 560, 300);
+  const narrow = hostWidth < 480;
+  const fontSize = narrow ? 11 : 12.5;
+
+  // On narrow (mobile) widths, drop the "(unit)" part of the label to save
+  // horizontal space -- the unit is still shown on the input field itself.
+  const items = rawItems
+    .map(it => ({ ...it, shortLabel: narrow ? it.label.replace(/\s*\([^)]*\)/, "") : it.label }))
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+
+  const leftPad = 16;   // guarantees label text never clips the left edge of the SVG
+  // Size the label column to the longest label instead of a fixed guess --
+  // avoids both wasted space (short labels) and truncation/collision
+  // (long labels). 8.0px/char was measured directly against this bold
+  // font's actual rendered glyph widths (DejaVu Sans Bold @ ~13px), not
+  // guessed -- an underestimate here is exactly what caused clipped
+  // leftmost characters in testing.
+  const longestLabelChars = Math.max(...items.map(it => `${it.shortLabel} = ${it.displayValue}`.length), 10);
+  // Correctness (no clipped text) takes priority over plot width, so the
+  // cap is generous even on narrow screens -- a long label legitimately
+  // needs the room regardless of viewport size.
+  const labelColW = Math.min(Math.max(longestLabelChars * (narrow ? 7.2 : 8.0) + leftPad + 12, narrow ? 110 : 170), narrow ? 230 : 310);
+  const rightPad = 70; // enough clearance for the "prediction = ###.#" label when it lands near the right edge
+  const rowH = narrow ? 44 : 40;
+  const topPad = 46;   // extra headroom for base/prediction labels, which may stack
+  const bottomPad = 46;
+  // plotW has a floor so the bars stay legible even when labelColW is large
+  // relative to hostWidth. When that floor engages, the true total width
+  // needed EXCEEDS hostWidth -- the SVG's viewBox (not a fixed CSS width)
+  // must reflect that actual content width, or rightPad silently shrinks
+  // and labels clip against the edge (exactly what happened before this
+  // fix: the right margin was quietly cut from 70px to ~40px).
+  const plotW = Math.max(hostWidth - labelColW - rightPad, 90);
+  const width = labelColW + plotW + rightPad;
+  const height = topPad + items.length * rowH + bottomPad;
+
+  // cumulative cascade positions
+  let running = base;
+  const bars = items.map(it => {
+    const start = running;
+    running += it.value;
+    return { ...it, start, end: running };
+  });
+
+  const allX = [base, prediction, ...bars.flatMap(b => [b.start, b.end])];
+  let xMin = Math.min(...allX), xMax = Math.max(...allX);
+  const pad = (xMax - xMin) * 0.12 || 1;
+  xMin -= pad; xMax += pad;
+
+  const xScale = (v) => labelColW + ((v - xMin) / (xMax - xMin)) * plotW;
+
+  // x-axis ticks -- fewer of them on narrow screens so the numbers don't
+  // run into each other (each tick label needs roughly 45px of clearance)
+  const tickCount = narrow ? 3 : 5;
+  const ticks = [];
+  for (let i = 0; i <= tickCount; i++) ticks.push(xMin + (i / tickCount) * (xMax - xMin));
+
+  const barH = 22;
+  let svg = `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" xmlns="http://www.w3.org/2000/svg">`;
+
+  // gridlines + axis
+  ticks.forEach(t => {
+    const x = xScale(t);
+    svg += `<line x1="${x}" y1="${topPad - 8}" x2="${x}" y2="${topPad + bars.length * rowH}" stroke="#eef2f6" stroke-width="1"/>`;
+    svg += `<text x="${x}" y="${topPad + bars.length * rowH + 20}" font-size="${narrow ? 9.5 : 11}" fill="#64748b" text-anchor="middle">${Math.round(t)}</text>`;
+  });
+  svg += `<text x="${labelColW + plotW/2}" y="${height - 6}" font-size="11.5" fill="#475569" text-anchor="middle">Predicted Capacity (kN)</text>`;
+
+  // base + prediction reference lines. When the two lines fall close
+  // together (common once contributions are small), stack their labels
+  // at two different heights instead of letting the text overlap.
+  const baseX = xScale(base), predX = xScale(prediction);
+  const lineTop = topPad - 8, lineBottom = topPad + bars.length * rowH;
+  const linesClose = Math.abs(baseX - predX) < 90;
+  const baseLabelY = linesClose ? topPad - 26 : topPad - 12;
+  const predLabelY = topPad - 12;
+  svg += `<line x1="${baseX}" y1="${lineTop}" x2="${baseX}" y2="${lineBottom}" stroke="#94a3b8" stroke-width="1.3" stroke-dasharray="4,3"/>`;
+  svg += `<text x="${baseX}" y="${baseLabelY}" font-size="11" fill="#64748b" text-anchor="middle">base = ${base.toFixed(1)}</text>`;
+  svg += `<line x1="${predX}" y1="${lineTop}" x2="${predX}" y2="${lineBottom}" stroke="#0b5952" stroke-width="1.6"/>`;
+  svg += `<text x="${predX}" y="${predLabelY}" font-size="11" fill="#0b5952" font-weight="700" text-anchor="middle">prediction = ${prediction.toFixed(1)}</text>`;
+
+  // bars + labels
+  bars.forEach((b, i) => {
+    const y = topPad + i * rowH + (rowH - barH) / 2;
+    const x1 = xScale(Math.min(b.start, b.end));
+    const x2 = xScale(Math.max(b.start, b.end));
+    const w = Math.max(x2 - x1, 1.5);
+    const color = b.value >= 0 ? "#dc2626" : "#2563eb";
+    svg += `<rect x="${x1}" y="${y}" width="${w}" height="${barH}" fill="${color}" rx="3"/>`;
+
+    const labelX = labelColW - 12;
+    const labelY = topPad + i * rowH + rowH / 2 + 4;
+    const labelText = `${b.shortLabel} = ${b.displayValue}`;
+    svg += `<text x="${labelX}" y="${labelY}" font-size="${fontSize}" fill="#1e293b" font-weight="600" text-anchor="end">${escapeXml(labelText)}</text>`;
+
+    // Value label: if the bar is wide enough, draw it INSIDE the bar
+    // (avoids ever colliding with the feature-label column, which
+    // otherwise happens whenever a large negative bar's left edge lands
+    // close to the label column). Only fall back to placing it outside
+    // the bar when the bar is too narrow for the text to fit inside.
+    const valText = `${b.value >= 0 ? "+" : ""}${b.value.toFixed(1)}`;
+    const estTextW = valText.length * 7 + 8;
+    if (w > estTextW) {
+      svg += `<text x="${(x1 + x2) / 2}" y="${labelY}" font-size="11.5" fill="white" font-weight="700" text-anchor="middle">${valText}</text>`;
+    } else {
+      // place outside on whichever side has more room, but never inside the label column
+      const roomLeft = x1 - labelColW;
+      const roomRight = plotW + labelColW - x2;
+      const putRight = roomRight >= roomLeft;
+      const valX = putRight ? x2 + 6 : Math.max(x1 - 6, labelColW + 4);
+      const anchor = putRight ? "start" : "end";
+      svg += `<text x="${valX}" y="${labelY}" font-size="11.5" fill="${color}" font-weight="700" text-anchor="${anchor}">${valText}</text>`;
+    }
+  });
+
+  svg += `</svg>`;
+  hostEl.innerHTML = svg;
+}
+
+function formatValue(v) {
+  // Show whole numbers without decimals, otherwise round to 2 dp -- avoids
+  // ugly full-float-precision labels like "123.3811382504" on the chart.
+  if (Number.isInteger(v)) return String(v);
+  return String(Math.round(v * 100) / 100);
+}
+
+function escapeXml(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function exportChart() {
+  const svgEl = document.querySelector("#chartHost svg");
+  if (!svgEl) return;
+  const svgData = new XMLSerializer().serializeToString(svgEl);
+  const vb = svgEl.getAttribute("viewBox").split(" ").map(Number);
+  const scale = 2; // export at 2x for print-quality resolution
+  const canvas = document.createElement("canvas");
+  canvas.width = vb[2] * scale;
+  canvas.height = vb[3] * scale;
+  const ctx = canvas.getContext("2d");
+  const img = new Image();
+  const svgBlob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(svgBlob);
+  img.onload = function () {
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    canvas.toBlob(function (blob) {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "shap_waterfall.png";
+      a.click();
+    });
+  };
+  img.src = url;
+}
+
+function runPrediction() {
+  const xArr = FIELDS.map(f => parseFloat(document.getElementById(`in_${f.key}`).value));
+  if (xArr.some(v => isNaN(v))) { alert("Please enter valid numbers for all fields."); return; }
+
+  const bundle = GUSSET_MODEL_BUNDLE;
+  const pred = predict(bundle.model, xArr);
+  const exp = explainRescaled(bundle.lookup, bundle.model, xArr, 12);
+
+  document.getElementById("resultValue").textContent = pred.toFixed(1);
+  document.getElementById("resultSub").textContent = "Computed exactly from the trained CatBoost model";
+  document.getElementById("resultCard").classList.add("show");
+
+  const items = FIELDS.map((f, i) => ({
+    label: `${f.label} (${f.unit})`,
+    value: exp.contributions[i],
+    displayValue: formatValue(xArr[i]),
+  }));
+
+  const chartHost = document.getElementById("chartHost");
+  renderWaterfall(chartHost, exp.base, exp.exactPred, items);
+  document.getElementById("captionText").style.display = "block";
+  document.getElementById("exportBtn").style.display = "inline-block";
+}
+
+initInputs();
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+</script>
+
+</body>
+</html>
